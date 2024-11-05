@@ -1,0 +1,252 @@
+```html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lector de Código de Barras con Cámara</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #video {
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            display: none;
+        }
+
+        #controls {
+            display: flex;
+            justify-content: center;
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            gap: 10px;
+        }
+
+        button {
+            padding: 15px;
+            font-size: 1.2em;
+            cursor: pointer;
+            border: 2px solid white;
+            color: white;
+            background-color: transparent;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: background-color 0.3s, transform 0.2s;
+        }
+
+        button:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+
+        button:active {
+            transform: scale(0.9);
+        }
+
+        #result {
+            font-size: 1.4em;
+            color: white;
+            text-shadow: 1px 1px 2px black;
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        #barcodeInput {
+            display: none;
+        }
+
+        #photoCanvas {
+            display: none;
+        }
+
+        .icon-image { 
+            width: 30px; 
+            height: 30px; 
+        }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline></video>
+    <div id="result">Esperando escanear...</div>
+    <div id="controls">
+        <button id="startButton">📷</button>
+        <button id="takePhotoButton" style="display:none;">
+            <img class="icon-image" src="camera-icon.png" alt="Tomar foto">
+        </button>
+        <button id="restartButton" style="display:none;">🔄</button>
+    </div>
+    <canvas id="photoCanvas"></canvas>
+
+    <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+    <script>
+        const resultDiv = document.getElementById('result');
+        const videoElement = document.getElementById('video');
+        const startButton = document.getElementById('startButton');
+        const restartButton = document.getElementById('restartButton');
+        const takePhotoButton = document.getElementById('takePhotoButton');
+        const photoCanvas = document.getElementById('photoCanvas');
+        let activeStream;
+        let photoCounter = 1;
+
+        startButton.addEventListener('click', startVideoStream);
+        restartButton.addEventListener('click', initialSetup);
+
+        function initialSetup() {
+            resultDiv.textContent = 'Esperando escanear...';
+            takePhotoButton.style.display = 'none';
+            restartButton.style.display = 'none';
+            startButton.style.display = 'block';
+            stopVideoStream();
+            Quagga.stop();
+            photoCounter = 1;
+        }
+
+        function startVideoStream() {
+            startButton.style.display = 'none';
+            restartButton.style.display = 'block';
+
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+                .then(stream => {
+                    activeStream = stream;
+                    videoElement.srcObject = stream;
+                    videoElement.style.display = 'block';
+                    startScanner();
+                }).catch(err => {
+                    resultDiv.textContent = 'No se puede acceder a la cámara. Por favor, revisa los permisos.';
+                });
+        }
+
+        function startScanner() {
+            Quagga.init({
+                inputStream: {
+                    name: "Live",
+                    type: "LiveStream",
+                    target: videoElement,
+                    constraints: {
+                        width: { min: 640 },
+                        height: { min: 480 },
+                        facingMode: "environment",
+                        aspectRatio: { min: 1, max: 100 }
+                    }
+                },
+                decoder: {
+                    readers: [
+                        "code_128_reader", 
+                        "ean_reader", 
+                        "ean_8_reader"
+                    ],
+                    multiple: false,
+                    debug: {
+                        drawBoundingBox: true,
+                        showPattern: true
+                    }
+                },
+                locate: true,
+                locator: {
+                    patchSize: "medium", 
+                    halfSample: false 
+                },
+                numOfWorkers: Math.max(4, navigator.hardwareConcurrency), 
+                frequency: 30 
+            }, err => {
+                if (err) {
+                    console.error(err);
+                    return;
+                }
+                Quagga.start();
+            });
+
+            Quagga.onProcessed(result => {
+                if (result) {
+                    const drawingCtx = Quagga.canvas.ctx.overlay;
+                    const drawingCanv = Quagga.canvas.dom.overlay;
+                    drawingCtx.clearRect(0, 0, drawingCanv.width, drawingCanv.height);
+
+                    if (result.boxes) {
+                        result.boxes.filter(box => box !== result.box).forEach(box => {
+                            Quagga.ImageDebug.drawPath(box, {x: 0, y: 1}, drawingCtx, {color: "green", lineWidth: 2});
+                        });
+                    }
+
+                    if (result.box) {
+                        Quagga.ImageDebug.drawPath(result.box, {x: 0, y: 1}, drawingCtx, {color: "#00F", lineWidth: 2});
+                    }
+
+                    if (result.codeResult && result.codeResult.code) {
+                        Quagga.ImageDebug.drawPath(result.line, {x: 'x', y: 'y'}, drawingCtx, {color: 'red', lineWidth: 3});
+                    }
+                }
+            });
+
+            Quagga.onDetected(data => {
+                const code = data.codeResult.code;
+                resultDiv.textContent = `Código escaneado: ${code}`;
+                Quagga.stop();
+                stopVideoStream();
+                takePhotoButton.style.display = 'block';
+                takePhotoButton.onclick = () => startPhotoCapture(code);
+            });
+        }
+
+        function stopVideoStream() {
+            if (activeStream) {
+                let tracks = activeStream.getTracks();
+                tracks.forEach(track => track.stop());
+            }
+            videoElement.style.display = 'none';
+        }
+
+        function startPhotoCapture(barcode) {
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+                .then(stream => {
+                    activeStream = stream;
+                    videoElement.srcObject = stream;
+                    videoElement.style.display = 'block';
+                    takePhotoButton.onclick = () => capturePhoto(barcode, stream);
+                }).catch(err => {
+                    resultDiv.textContent = 'No se puede acceder a la cámara para tomar fotos.';
+                });
+        }
+
+        function capturePhoto(barcode, stream) {
+            if (photoCounter > 2000) {
+                alert('Se ha alcanzado el límite de 2000 fotos para este código de barras.');
+                return;
+            }
+            const context = photoCanvas.getContext('2d');
+            photoCanvas.width = videoElement.videoWidth;
+            photoCanvas.height = videoElement.videoHeight;
+            context.drawImage(videoElement, 0, 0);
+            storeImage(barcode);
+        }
+
+        function storeImage(barcode) {
+            const dataUrl = photoCanvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = `${barcode}_${photoCounter}.png`;
+            link.click();
+            photoCounter++;
+        }
+    </script>
+</body>
+</html>
